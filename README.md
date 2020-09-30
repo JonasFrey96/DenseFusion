@@ -1,4 +1,4 @@
-# DenseFusion
+# DenseFusion Lightning 
 
 <p align="center">
 	<img src ="assets/pullfig.png" width="1000" />
@@ -21,64 +21,22 @@
 
 ## Overview
 
-This repository is the implementation code of the paper "DenseFusion: 6D Object Pose Estimation by Iterative Dense Fusion"([arXiv](https://arxiv.org/abs/1901.04780), [Project](https://sites.google.com/view/densefusion), [Video](https://www.youtube.com/watch?v=SsE5-FuK5jo)) by Wang et al. at [Stanford Vision and Learning Lab](http://svl.stanford.edu/) and [Stanford People, AI & Robots Group](http://pair.stanford.edu/). The model takes an RGB-D image as input and predicts the 6D pose of the each object in the frame. This network is implemented using [PyTorch](https://pytorch.org/) and the rest of the framework is in Python. Since this project focuses on the 6D pose estimation process, we do not specifically limit the choice of the segmentation models. You can choose your preferred semantic-segmentation/instance-segmentation methods according to your needs. In this repo, we provide our full implementation code of the DenseFusion model, Iterative Refinement model and a vanilla SegNet semantic-segmentation model used in our real-robot grasping experiment. The ROS code of the real robot grasping experiment is not included.
+This repository extends the orgirnal Implementation of ([DenseFusion](https://github.com/j96w/DenseFusion). We reimplement parts of the network to allow the following extentions:
+ - Complete PytorchLightning Intergration
+ - Providing a Conda Enviorment for Easy Setup 
+ - PyTorch Evaluation Pipeline
+ - Training on mutiple GPUs
+ - Batch training#
+ - Reducing the training time from mutiple days to 8 hours
+ - Allow more data augmentation
+ - Include advanced learning rate scheduling
+
+In general this is implementation of the paper "DenseFusion: 6D Object Pose Estimation by Iterative Dense Fusion"([arXiv](https://arxiv.org/abs/1901.04780), [Project](https://sites.google.com/view/densefusion), [Video](https://www.youtube.com/watch?v=SsE5-FuK5jo)) by Wang et al. at [Stanford Vision and Learning Lab](http://svl.stanford.edu/) and [Stanford People, AI & Robots Group](http://pair.stanford.edu/). 
 
 
 ## Requirements
 
-* Python 2.7/3.5/3.6 (If you want to use Python2.7 to run this repo, please rebuild the `lib/knn/` (with PyTorch 0.4.1).)
-* [PyTorch 0.4.1](https://pytorch.org/) ([PyTroch 1.0 branch](<https://github.com/j96w/DenseFusion/tree/Pytorch-1.0>))
-* PIL
-* scipy
-* numpy
-* pyyaml
-* logging
-* matplotlib
 * CUDA 7.5/8.0/9.0 (Required. CPU-only will lead to extreme slow training speed because of the loss calculation of the symmetry objects (pixel-wise nearest neighbour loss).)
-
-## Code Structure
-* **datasets**
-	* **datasets/ycb**
-		* **datasets/ycb/dataset.py**: Data loader for YCB_Video dataset.
-		* **datasets/ycb/dataset_config**
-			* **datasets/ycb/dataset_config/classes.txt**: Object list of YCB_Video dataset.
-			* **datasets/ycb/dataset_config/train_data_list.txt**: Training set of YCB_Video dataset.
-			* **datasets/ycb/dataset_config/test_data_list.txt**: Testing set of YCB_Video dataset.
-	* **datasets/linemod**
-		* **datasets/linemod/dataset.py**: Data loader for LineMOD dataset.
-		* **datasets/linemod/dataset_config**: 
-			* **datasets/linemod/dataset_config/models_info.yml**: Object model info of LineMOD dataset.
-* **replace_ycb_toolbox**: Replacement codes for the evaluation with [YCB_Video_toolbox](https://github.com/yuxng/YCB_Video_toolbox).
-* **trained_models**
-	* **trained_models/ycb**: Checkpoints of YCB_Video dataset.
-	* **trained_models/linemod**: Checkpoints of LineMOD dataset.
-* **lib**
-	* **lib/loss.py**: Loss calculation for DenseFusion model.
-	* **lib/loss_refiner.py**: Loss calculation for iterative refinement model.
-	* **lib/transformations.py**: [Transformation Function Library](https://www.lfd.uci.edu/~gohlke/code/transformations.py.html).
-    * **lib/network.py**: Network architecture.
-    * **lib/extractors.py**: Encoder network architecture adapted from [pspnet-pytorch](https://github.com/Lextal/pspnet-pytorch).
-    * **lib/pspnet.py**: Decoder network architecture.
-    * **lib/utils.py**: Logger code.
-    * **lib/knn/**: CUDA K-nearest neighbours library adapted from [pytorch_knn_cuda](https://github.com/chrischoy/pytorch_knn_cuda).
-* **tools**
-	* **tools/_init_paths.py**: Add local path.
-	* **tools/eval_ycb.py**: Evaluation code for YCB_Video dataset.
-	* **tools/eval_linemod.py**: Evaluation code for LineMOD dataset.
-	* **tools/train.py**: Training code for YCB_Video dataset and LineMOD dataset.
-* **experiments**
-	* **experiments/eval_result**
-		* **experiments/eval_result/ycb**
-			* **experiments/eval_result/ycb/Densefusion_wo_refine_result**: Evaluation result on YCB_Video dataset without refinement.
-			* **experiments/eval_result/ycb/Densefusion_iterative_result**: Evaluation result on YCB_Video dataset with iterative refinement.
-		* **experiments/eval_result/linemod**: Evaluation results on LineMOD dataset with iterative refinement.
-	* **experiments/logs/**: Training log files.
-	* **experiments/scripts**
-		* **experiments/scripts/train_ycb.sh**: Training script on the YCB_Video dataset.
-		* **experiments/scripts/train_linemod.sh**: Training script on the LineMOD dataset.
-		* **experiments/scripts/eval_ycb.sh**: Evaluation script on the YCB_Video dataset.
-		* **experiments/scripts/eval_linemod.sh**: Evaluation script on the LineMOD dataset.
-* **download.sh**: Script for downloading YCB_Video Dataset, preprocessed LineMOD dataset and the trained checkpoints.
 
 
 ## Datasets

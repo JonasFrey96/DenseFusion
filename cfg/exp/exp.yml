@@ -1,0 +1,177 @@
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_one_batch_long/_" #overfit_1_batch_bs_1
+model_mode: fit
+
+model:
+  df_load: False
+  df_refiner: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
+  df_pose_estimator: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
+  df_w_normal: 0.015
+  df_w_normal_rate: 0.3
+  df_refine_iterations: 1
+  
+lr_cfg:
+  on_plateau_cfg:
+    mode: 'min'
+    factor: 0.3
+    threshold: 0.02
+  scheduler:
+    monitor: 'train_loss'
+    interval: 'epoch'
+    frequency: 1
+
+early_stopping:
+  monitor: 'avg_val_dis_float'
+  patience: 100
+  strict: true
+  verbose: true
+  mode: 'min'
+
+model_checkpoint:
+  verbose: true
+  monitor: 'avg_val_dis'
+  mode: 'min'
+  prefix: ''
+  save_last: true
+  save_top_k: 10
+
+
+trainer:
+  num_nodes: 1
+  precision: 16
+  auto_lr_find: false
+  accumulate_grad_batches: 4
+  fast_dev_run: false
+  limit_train_batches: 5000
+  limit_val_batches: 5
+  limit_test_batches: 5
+  progress_bar_refresh_rate: 1
+  max_epochs: 100
+  terminate_on_nan: false
+  profiler: false
+  gpus: -1
+
+training:
+  refine_iterations: 2
+  lr: 1.0e-4
+  test_size: 0.1
+
+visu:
+  images_train: 1
+  images_test: 1
+  images_val: 1
+  
+  log_to_file: True
+
+early_stopping_cfg:
+  patience: 10
+
+loader:
+  batch_size: 8
+  num_workers: 6
+  shuffle: True
+  pin_memory: True
+
+d_test:
+  name: "ycb"
+  objects: 21
+  num_points: 1000
+  num_pt_mesh_small: 2300
+  num_pt_mesh_large: 2300
+  obj_list_fil: null
+  obj_list_sym:
+    - 12
+    - 15
+    - 18
+    - 19
+    - 20
+  batch_list_cfg:
+    sequence_names: null
+    seq_length: 1
+    fixed_length: true
+    sub_sample: 1
+    mode: "test"
+    add_syn_to_train: false
+  noise_cfg:
+    status: false
+    noise_trans: 0.0
+  output_cfg:
+    overfitting_nr_idx: 1
+    vm_in_dataloader: true
+    return_same_size_tensors: true
+    force_one_object_visible: true
+    status: false
+    refine: false
+    add_depth_image: true
+    add_mask_image: true
+    norm_render: false
+    color_jitter_render:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    norm_real: false
+    color_jitter_real:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    visu:
+      status: true
+      return_img: true
+
+d_train:
+  name: "ycb"
+  objects: 21
+  num_points: 1000
+  num_pt_mesh_small: 2300
+  num_pt_mesh_large: 2300
+  obj_list_fil: null
+  obj_list_sym:
+    - 12
+    - 15
+    - 18
+    - 19
+    - 20
+  batch_list_cfg:
+    sequence_names: null
+    seq_length: 1
+    no_list_for_sequence_len_one: True
+    fixed_length: true
+    sub_sample: 1
+    mode: "train"
+    add_syn_to_train: true
+  noise_cfg:
+    status: false
+    noise_trans: 0
+  output_cfg:
+    overfitting_nr_idx: 1
+    vm_in_dataloader: true
+    return_same_size_tensors: true
+    force_one_object_visible: true
+    status: false
+    refine: false
+    add_depth_image: true
+    add_mask_image: true
+    norm_render: false
+    color_jitter_render:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    norm_real: false
+    color_jitter_real:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    visu:
+      status: true
+      return_img: true

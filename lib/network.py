@@ -1,20 +1,9 @@
-import argparse
-import os
-import random
 import torch
 import torch.nn as nn
-import torch.nn.parallel
-import torch.backends.cudnn as cudnn
-import torch.optim as optim
 import torch.utils.data
-import torchvision.transforms as transforms
-import torchvision.utils as vutils
-from torch.autograd import Variable
-from PIL import Image
-import numpy as np
-import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
+from helper import batched_index_select
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
@@ -120,10 +109,9 @@ class PoseNet(nn.Module):
         tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
         cx = torch.sigmoid(self.conv4_c(cx)).view(bs, self.num_obj, 1, self.num_points)
         
-        b = 0
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
-        out_cx = torch.index_select(cx[b], 0, obj[b])
+        out_rx = batched_index_select(t=rx, inds=obj, dim=1).squeeze(1)
+        out_cx = batched_index_select(t=cx, inds=obj, dim=1).squeeze(1)
+        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1)
         
         out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
         out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
@@ -199,8 +187,7 @@ class PoseRefineNet(nn.Module):
         rx = self.conv3_r(rx).view(bs, self.num_obj, 4)
         tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
 
-        b = 0
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
-
+        out_rx = batched_index_select(t=rx, inds=obj, dim=1).squeeze(1)
+        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1
+        
         return out_rx, out_tx
