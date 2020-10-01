@@ -1,5 +1,5 @@
 import warnings
-warnings.simplefilter("ignore", UserWarning)
+# warnings.simplefilter("ignore", UserWarning)
 
 import copy
 import datetime
@@ -12,20 +12,15 @@ import logging
 import signal
 import pickle
 
-
 # misc
 import numpy as np
 import pandas as pd
 import random
 import sklearn
-from scipy.spatial.transform import Rotation as R
+
 from math import pi
 import coloredlogs
 import datetime
-
-sys.path.insert(0, os.getcwd())
-sys.path.append(os.path.join(os.getcwd() + '/src'))
-sys.path.append(os.path.join(os.getcwd() + '/lib'))
 
 import torch
 import torch.autograd.profiler as profiler
@@ -35,15 +30,16 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-
 from scipy.spatial.transform import Rotation as R
+
+sys.path.insert(0, os.getcwd())
+sys.path.append(os.path.join(os.getcwd() + '/src'))
+sys.path.append(os.path.join(os.getcwd() + '/lib'))
 
 coloredlogs.install()
 
 # network dense fusion
 from lib.network import PoseNet, PoseRefineNet
-
-
 # src modules
 from helper import pad
 from helper import re_quat, flatten_dict
@@ -170,19 +166,38 @@ class TrackNet6D(LightningModule):
         
         # unpack batch
         points, choose, img, target, model_points, idx = batch[0:6]
-        depth_img, label, img_orig, cam = batch[6:10]
-        gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
         log_scalars = {}
         bs = points.shape[0]
 
+        tight_padded_img_batch = tight_image_batch(
+                img, device=self.device)
 
-        out_rx, out_tx, out_cx, emb = self.df_pose_estimator(img ,x , choose, obj)
+        pred_r = torch.zeros((bs, 1000, 4), device=self.device)
+        pred_t = torch.zeros((bs, 1000, 3), device=self.device)
+        pred_c = torch.zeros((bs, 1000, 1), device=self.device)
+        emb = torch.zeros((bs, 32, 1000), device=self.device)
+        
+        for i in range(bs):
+            pred_r[i], pred_t[i], pred_c[i], emb[i] = self.df_pose_estimator(
+                ret_cropped_image(img[i])[None],
+                points[i][None],
+                choose[i][None],
+                idx[i][None])
 
-        for i in range( self.exp['training']['refine_iterations'] ):
-            out_rx, out_tx = self.df_refiner(x,emb,obj)
+            refine = True if exp['model']['df_refine_iterations'] > 0 else False
 
+            loss, dis, new_points, new_target, pred_r_current, pred_t_current = self.df_criterion(
+                pred_r, pred_t, pred_c,
+                target, model_points, idx,
+                points, exp['model']['df_w'], refine)
 
-        return pred_trans, pred_rot_wxyz, pred_points, log_scalars
+        for i in range( self.exp['model']['df_refine_iterations'] ):
+            pred_r, pred_t = self.df_refiner(new_points, emb, idx)
+            dis, new_points, new_target, pred_r_current, pred_t_current = self.df_refine_criterion(
+                pred_r, pred_t, new_target, model_points, idx,
+                new_points)
+
+        return dis, pred_r_current, pred_t_current, new_points, log_scalars
 
     def training_step(self, batch, batch_idx):
         self._mode = 'train'
@@ -191,19 +206,15 @@ class TrackNet6D(LightningModule):
         total_dis = 0
         
         # forward
-        pred_trans, pred_rot_wxyz, pred_points, log_scalars = self(batch[0])
-
-        # calculate loss
-        self.criterion_adds() 
+        dis, pred_r_current, pred_t_current, new_points, log_scalars = self(batch[0])
 
         if self.counter_images_logged < self.exp.get('visu', {}).get('images_train', 1):
-            self.visu_batch(batch, pred_trans, pred_rot_wxyz, pred_points)
-
+            # self.visu_batch(batch, pred_trans, pred_rot_wxyz, pred_points) TODO
+            pass 
         # tensorboard logging
-        tensorboard_logs = {'train_loss': float(loss)}
-
+        tensorboard_logs = {'train_loss': float(dis)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
-        return {'loss': loss, 'log': tensorboard_logs, 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Add': log_scalars['loss_pose_add'], 'L_Tra': log_scalars[f'loss_translation']}}
+        return {'loss': dis, 'log': tensorboard_logs} # 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Add': log_scalars['loss_pose_add'], 'L_Tra': log_scalars[f'loss_translation']}}
 
     def validation_epoch_end(self, outputs):
         avg_dict = {}

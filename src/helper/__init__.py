@@ -4,5 +4,6 @@ __all__ = (
     'flatten_list',
     'flatten_dict',
     'pad',
-    'get_bbox_480_640'
+    'get_bbox_480_640',
+    'knn'
 )

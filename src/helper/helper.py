@@ -7,6 +7,23 @@ import collections
 import torch
 import copy
 
+def knn(ref, query):
+    """return indices of ref for each query point. L2 norm
+
+    Args:
+        ref ([type]): points * 3
+        query ([type]): tar_points * 3
+
+    Returns:
+        [knn]: distance = query * 1 , indices = query * 1
+    """
+    mp2 = ref.unsqueeze(0).repeat(query.shape[0], 1, 1)
+    tp2 = query.unsqueeze(1).repeat(1, ref.shape[0], 1)
+    dist = torch.norm(mp2 - tp2, dim=2, p=None)
+    knn = dist.topk(1, largest=False)
+    return knn
+
+
 def batched_index_select(t, inds, dim=1):
     """index batch tensor
 
