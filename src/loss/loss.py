@@ -23,7 +23,7 @@ def knn(ref, query):
     return knn
 
 
-def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, num_point_mesh, sym_list, device):
+def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, num_point_mesh, sym_list):
     """ works i checked if manually to give the same result as loss_calculation
 
     Args:
@@ -47,7 +47,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
 
     pred_r = pred_r / (torch.norm(pred_r, dim=2).view(bs, num_p, 1))
     base = quat_to_rot(pred_r.contiguous().view(-1, 4),
-                       'wxyz', device=device)
+                       'wxyz', device=points.device)
     ori_base = base
     base = base.contiguous().transpose(2, 1).contiguous()
 
@@ -79,32 +79,33 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
 
     dis = dis.view(bs, num_p)
 
-    enum = torch.range(0, bs - 1, device=device, dtype=torch.long)
+    enum = torch.arange(0, bs, 1, device=points.device, dtype=torch.long)
 
     ori_t_sel = ori_t.view(bs, num_p, 3)[enum, which_max, :]
     points_sel = points.view(bs, num_p, 3)[enum, which_max, :]
     ori_base_sel = ori_base.view(bs, num_p, 3, 3)[enum, which_max, :, :]
-
+    
     t = ori_t_sel + points_sel
+    r = pred_r[enum, which_max, :]
+
     ori_base = ori_base_sel
 
     points = points.view(bs, num_p, 3)
-    ori_t = t.unsqueeze(1).repeat(1, num_p, 1).contiguous()
+    ori_t = t[:,None,:].repeat(1, num_p, 1)
+    
     new_points = torch.bmm(
-        (points - ori_t), ori_base).contiguous().view(bs, num_p, 3)
+        (points - ori_t), ori_base)
 
     tmp1 = ori_target.view(bs, num_p, num_point_mesh, 3)
-    new_target = tmp1[:, 0, :, :].view(bs, num_point_mesh, 3).contiguous()
+    new_target = tmp1[:, 0, :, :].view(bs, num_point_mesh, 3)
     # ori_t 16 2000 3
 
-    ori_t = t.unsqueeze(1).repeat(1, num_point_mesh, 1).contiguous().view(
-        bs, num_point_mesh, 3)
+    ori_t = t[:,None,:].repeat(1, num_point_mesh, 1)
 
-    new_target = torch.bmm((new_target - ori_t), ori_base).contiguous()
+    new_target = torch.bmm((new_target - ori_t), ori_base)
 
     # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
-    return loss, dis[enum, which_max], new_points.detach(), new_target.detach()
-
+    return loss, dis[enum, which_max], new_points.detach(), new_target.detach(), r.detach(), t.detach() #TODO
 
 class Loss(_Loss):
 
@@ -113,5 +114,5 @@ class Loss(_Loss):
         self.num_pt_mesh = num_points_mesh
         self.sym_list = sym_list
 
-    def forward(self, pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, device):
-        return loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, self.num_pt_mesh, self.sym_list, device)
+    def forward(self, pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine):
+        return loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, self.num_pt_mesh, self.sym_list)

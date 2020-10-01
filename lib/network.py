@@ -188,6 +188,5 @@ class PoseRefineNet(nn.Module):
         tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
 
         out_rx = batched_index_select(t=rx, inds=obj, dim=1).squeeze(1)
-        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1
-        
+        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1)
         return out_rx, out_tx

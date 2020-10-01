@@ -16,11 +16,10 @@ import torchvision
 from pathlib import Path
 
 from rotations import * #TODO Check what is neeed here
-from helper import rotation_angle, re_quat
+from helper import re_quat
 from dataset import Backend
 from helper import flatten_dict, get_bbox_480_640 #TODO What is needed here
 from scipy.spatial.transform import Rotation as R #TODO Do we need this if we have the rotations ?
-from helper import get_bb_from_depth, get_bb_real_target, backproject_points #TODO What is needed here
 
 class YCB(Backend):
     def __init__(self, cfg_d, cfg_env):
@@ -55,9 +54,6 @@ class YCB(Backend):
         self._xmap = np.array([[j for i in range(640)] for j in range(480)])
         self._ymap = np.array([[i for i in range(640)] for j in range(480)])
 
-        if self._cfg_d['output_cfg'].get('vm_in_dataloader', False):
-            self._use_vm = True
-            store = cfg_env['p_ycb'] + '/viewpoints_renderings'
 
         if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
             n = self._cfg_d['noise_cfg']
@@ -319,14 +315,6 @@ class YCB(Backend):
 
         tup = tup + (gt_rot_wxyz, gt_trans, unique_desig)
 
-        if self._use_vm:
-            new_tup = self.get_rendered_data(tup)
-            if new_tup is False:
-                return [False]
-
-            n_tup = (tup[0], 0, 0, *tup[3:6], 0, 0, *tup[8:13])
-            n_tup += new_tup
-            return n_tup
         return tup
 
     def get_desig(self, path):

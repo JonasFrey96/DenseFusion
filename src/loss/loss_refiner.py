@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import random
 
-from rotations import quat_to_rot
+from rotations import quat_to_rot, compose_quat
 from helper import knn
 
 class Loss_refine(_Loss):
@@ -14,12 +14,12 @@ class Loss_refine(_Loss):
         self.num_pt_mesh = num_points_mesh
         self.sym_list = sym_list
 
-    def forward(self, pred_r, pred_t, target, model_points, idx, points, device, use_orig=False):
+    def forward(self, pred_r, pred_t, target, model_points, idx, points, pred_r_current, pred_t_current, use_orig=False):
         bs, _ = pred_r.size()
         num_p = len(points[0])
         pred_r = pred_r / (torch.norm(pred_r, dim=1).view(bs, 1))
         base = quat_to_rot(pred_r.contiguous().view(-1, 4),
-                           'wxyz', device=device)
+                           'wxyz', device=points.device)
         ori_base = base
         base = base.contiguous().transpose(2, 1).unsqueeze(
             0).contiguous().view(-1, 3, 3)
@@ -62,4 +62,7 @@ class Loss_refine(_Loss):
         new_target = torch.bmm((new_target - ori_t), ori_base).contiguous()
 
         # print('------------> ', dis.item(), idx[0].item())
-        return dis, new_points.detach(), new_target.detach()
+
+        pred_r_current = compose_quat( pred_r_current, pred_r) #TODO check if this is working !!!
+
+        return dis, new_points.detach(), new_target.detach(), pred_r_current, pred_t_current+pred_t

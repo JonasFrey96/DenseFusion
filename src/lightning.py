@@ -1,10 +1,15 @@
 import warnings
-# warnings.simplefilter("ignore", UserWarning)
+warnings.simplefilter("ignore", UserWarning)
+import sys
+import os
+
+sys.path.insert(0, os.getcwd())
+sys.path.append(os.path.join(os.getcwd() + '/src'))
+sys.path.append(os.path.join(os.getcwd() + '/lib'))
+print( os.getcwd() )
 
 import copy
 import datetime
-import sys
-import os
 import time
 import shutil
 import argparse
@@ -17,6 +22,7 @@ import numpy as np
 import pandas as pd
 import random
 import sklearn
+import yaml
 
 from math import pi
 import coloredlogs
@@ -29,12 +35,9 @@ from pytorch_lightning.core.lightning import LightningModule
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.callbacks import ModelCheckpoint
-
+from pytorch_lightning.callbacks.base import Callback
 from scipy.spatial.transform import Rotation as R
 
-sys.path.insert(0, os.getcwd())
-sys.path.append(os.path.join(os.getcwd() + '/src'))
-sys.path.append(os.path.join(os.getcwd() + '/lib'))
 
 coloredlogs.install()
 
@@ -42,16 +45,14 @@ coloredlogs.install()
 from lib.network import PoseNet, PoseRefineNet
 # src modules
 from helper import pad
-from helper import re_quat, flatten_dict
-from helper import get_bb_from_depth, get_bb_real_target
-from helper import backproject_points_batch, backproject_points, backproject_point
+from helper import flatten_dict
 
 from dataset import GenericDataset
 from visu import Visualizer
 
-from eval import *
 from rotations import *
-from loss import compute_auc, LossAddS
+from loss import compute_auc, LossAddS, Loss_refine, Loss
+from eval import *
 
 def ret_cropped_image(img):
     test = torch.nonzero(img[:, :, :])
@@ -98,7 +99,7 @@ def check_exp(exp):
         print('Overfitting on ONE batch is activated')
         time.sleep(5)
 
-class TrackNet6D(LightningModule):
+class DenseFusionLightning(LightningModule):
     def __init__(self, exp, env):
         super().__init__()
         self._mode = 'init'
@@ -135,9 +136,13 @@ class TrackNet6D(LightningModule):
                 self.df_refiner.load_state_dict(
                     torch.load(exp['model']['df_refiner']))
 
-        self.criterion_adds = LossAddS(sym_list=exp['d_train']['obj_list_sym'])
-
-        self.visualizer = None
+        sl = exp['d_train']['obj_list_sym']
+        self.df_criterion = Loss( num_points_large, sl)
+        self.df_criterion_refine = Loss_refine( num_points_large, sl)
+        
+        self.criterion_adds = LossAddS(sym_list=sl)
+        
+        self.visualizer = Visualizer(self.exp['model_path'] + '/visu/', None)
         
         self._dict_track = {}
         self.number_images_log_test = self.exp.get(
@@ -151,6 +156,8 @@ class TrackNet6D(LightningModule):
         logging.getLogger("lightning").addHandler(fh)
         
         self.start = time.time()
+
+        self.best_val_loss = 999
         
         # optional, set the logging level
         if self.exp.get('visu', {}).get('log_to_file', False):
@@ -184,20 +191,20 @@ class TrackNet6D(LightningModule):
                 choose[i][None],
                 idx[i][None])
 
-            refine = True if exp['model']['df_refine_iterations'] > 0 else False
+        refine = True if exp['model']['df_refine_iterations'] > 0 else False
 
-            loss, dis, new_points, new_target, pred_r_current, pred_t_current = self.df_criterion(
-                pred_r, pred_t, pred_c,
-                target, model_points, idx,
-                points, exp['model']['df_w'], refine)
+        loss, dis, new_points, new_target, pred_r_current, pred_t_current = self.df_criterion(
+            pred_r, pred_t, pred_c,
+            target, model_points, idx,
+            points, exp['model']['df_w'], refine)
 
         for i in range( self.exp['model']['df_refine_iterations'] ):
             pred_r, pred_t = self.df_refiner(new_points, emb, idx)
             dis, new_points, new_target, pred_r_current, pred_t_current = self.df_refine_criterion(
                 pred_r, pred_t, new_target, model_points, idx,
-                new_points)
+                new_points, pred_r_current, pred_t_current)
 
-        return dis, pred_r_current, pred_t_current, new_points, log_scalars
+        return loss, dis, pred_r_current, pred_t_current, new_points, log_scalars
 
     def training_step(self, batch, batch_idx):
         self._mode = 'train'
@@ -206,14 +213,57 @@ class TrackNet6D(LightningModule):
         total_dis = 0
         
         # forward
-        dis, pred_r_current, pred_t_current, new_points, log_scalars = self(batch[0])
+        loss, dis, pred_r_current, pred_t_current, new_points, log_scalars = self(batch[0])
 
         if self.counter_images_logged < self.exp.get('visu', {}).get('images_train', 1):
             # self.visu_batch(batch, pred_trans, pred_rot_wxyz, pred_points) TODO
             pass 
         # tensorboard logging
+        loss = torch.mean(loss, dim= 0) 
+        tensorboard_logs = {'train_loss': float(loss)}
+        tensorboard_logs = {**tensorboard_logs, **log_scalars}
+        self._dict_track = {**self._dict_track}
+        return {'train_loss': loss, 'log': tensorboard_logs,'progress_bar': {'Loss': loss, 'ADD-S': torch.mean(dis, dim= 0) }  }
+
+    def validation_step(self, batch, batch_idx):
+        self._mode = 'train'
+        st = time.time()
+        total_loss = 0
+        total_dis = 0
+        
+        # forward
+        loss, dis, pred_r_current, pred_t_current, new_points, log_scalars = self(batch[0])
+
+        if self.counter_images_logged < self.exp.get('visu', {}).get('images_train', 1):
+            self.visu_batch(batch[0], pred_r_current, pred_t_current, new_points) 
+        # tensorboard logging
+        loss = torch.mean(loss, dim= 0)
+        dis = torch.mean(dis, dim= 0)
+        tensorboard_logs = {'val_loss': float( loss ), 'val_dis': loss, 'val_dis_float': float(loss) }
+        
+        tensorboard_logs = {**tensorboard_logs, **log_scalars}
+
+        self._dict_track = {**self._dict_track,'val_dis_float': float(loss), 'val_dis': float(loss), 'val_loss': float(loss)}
+        
+        return{'val_loss': loss, 'val_dis': loss, 'log': tensorboard_logs} # 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Add': log_scalars['loss_pose_add'], 'L_Tra': log_scalars[f'loss_translation']}}
+    
+    def test_step(self, batch, batch_idx):
+        self._mode = 'train'
+        st = time.time()
+        total_loss = 0
+        total_dis = 0
+        
+        # forward
+        loss, dis, pred_r_current, pred_t_current, new_points, log_scalars = self(batch[0])
+
+        if self.counter_images_logged < self.exp.get('visu', {}).get('images_train', 1):
+            # self.visu_batch(batch, pred_trans, pred_rot_wxyz, pred_points) TODO
+            pass 
+        # tensorboard logging
+        
         tensorboard_logs = {'train_loss': float(dis)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
+        self._dict_track = {**self._dict_track}
         return {'loss': dis, 'log': tensorboard_logs} # 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Add': log_scalars['loss_pose_add'], 'L_Tra': log_scalars[f'loss_translation']}}
 
     def validation_epoch_end(self, outputs):
@@ -245,9 +295,11 @@ class TrackNet6D(LightningModule):
         self.logger.experiment.add_image(tag, np.array(img).astype(
             np.uint8), global_step=self.current_epoch, dataformats='HWC')
 
-        avg_val_dis_float = float(avg_dict['avg_val_loss  [+inf - 0]'])
-        return {'avg_val_dis_float': avg_val_dis_float,
-                'avg_val_dis': avg_dict['avg_val_loss  [+inf - 0]'],
+        avg_val_dis_float = float(0)
+        if  avg_dict.get( 'avg_val_loss',999) < self.best_val_loss:
+            self.best_val_loss = avg_dict.get( 'avg_val_loss',999)
+
+        return {'avg_val_dis_float': float(avg_dict.get( 'avg_val_loss',999)),
                 'log': avg_dict}
 
     def train_epoch_end(self, outputs):
@@ -298,113 +350,139 @@ class TrackNet6D(LightningModule):
                 'avg_test_dis': avg_dict['avg_test_loss  [+inf - 0]'],
                 'log': avg_dict}
 
-    def visu_pose(self, batch_idx, pred_r, pred_t, target, model_points, cam, img_orig, unique_desig, idx, store=True):
-        if self.visualizer is None:
-            self.visualizer = Visualizer(self.exp['model_path'] +
-                                         '/visu/', self.logger.experiment)
-        points = copy.deepcopy(target.detach().cpu().numpy())
-        img = img_orig.detach().cpu().numpy()
-        if self.exp['visu'].get('visu_gt', False):
-            self.visualizer.plot_estimated_pose(tag='gt_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                                epoch=self.current_epoch,
-                                                img=img,
-                                                points=points,
-                                                cam_cx=float(cam[0]),
-                                                cam_cy=float(cam[1]),
-                                                cam_fx=float(cam[2]),
-                                                cam_fy=float(cam[3]),
-                                                store=store)
-            self.visualizer.plot_contour(tag='gt_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                         epoch=self.current_epoch,
-                                         img=img,
-                                         points=points,
-                                         cam_cx=float(cam[0]),
-                                         cam_cy=float(cam[1]),
-                                         cam_fx=float(cam[2]),
-                                         cam_fy=float(cam[3]),
-                                         store=store)
-
-        t = pred_t.detach().cpu().numpy()
-        r = pred_r.detach().cpu().numpy()
-
-        rot = R.from_quat(re_quat(r, 'wxyz'))
-
-        self.visualizer.plot_estimated_pose(tag='pred_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+    def visu_batch(self, batch, pred_r_current, pred_t_current, new_points):
+        target = copy.deepcopy(batch[3][0].detach().cpu().numpy())
+        mp = copy.deepcopy(batch[4][0].detach().cpu().numpy())
+        gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
+        img = batch[8].detach().cpu().numpy()[0]
+        cam = batch[9][0]
+        pre = f'%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])) 
+        store = self.exp['visu'].get('store', False)
+        self.visualizer.plot_estimated_pose(tag=f'target_{pre}',
                                             epoch=self.current_epoch,
                                             img=img,
-                                            points=copy.deepcopy(
-            model_points[:, :].detach(
-            ).cpu().numpy()),
-            trans=t.reshape((1, 3)),
-            rot_mat=rot.as_matrix(),
-            cam_cx=float(cam[0]),
-            cam_cy=float(cam[1]),
-            cam_fx=float(cam[2]),
-            cam_fy=float(cam[3]),
-            store=store)
+                                            points=target,
+                                            cam_cx=float(cam[0]),
+                                            cam_cy=float(cam[1]),
+                                            cam_fx=float(cam[2]),
+                                            cam_fy=float(cam[3]),
+                                            store=store)
 
-        self.visualizer.plot_contour(tag='pred_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                     epoch=self.current_epoch,
-                                     img=img,
-                                     points=copy.deepcopy(
-            model_points[:, :].detach(
-            ).cpu().numpy()),
-            trans=t.reshape((1, 3)),
-            rot_mat=rot.as_matrix(),
-            cam_cx=float(cam[0]),
-            cam_cy=float(cam[1]),
-            cam_fx=float(cam[2]),
-            cam_fy=float(cam[3]),
-            store=store)
+        self.visualizer.plot_estimated_pose(tag=f'new_points_{pre}',
+                                            epoch=self.current_epoch,
+                                            img=img,
+                                            points=new_points[0].clone().detach().cpu().numpy(),
+                                            cam_cx=float(cam[0]),
+                                            cam_cy=float(cam[1]),
+                                            cam_fx=float(cam[2]),
+                                            cam_fy=float(cam[3]),
+                                            store=store)
+        t = pred_t_current.detach().cpu().numpy()[0,:][None,:]
+        mat  = quat_to_rot(pred_r_current).detach().cpu().numpy()[0]
+        self.visualizer.plot_estimated_pose(tag=f'pred_{pre}',
+                                            epoch=self.current_epoch,
+                                            img=img,
+                                            points=mp,
+                                            trans=t,
+                                            rot_mat=mat,
+                                            cam_cx=float(cam[0]),
+                                            cam_cy=float(cam[1]),
+                                            cam_fx=float(cam[2]),
+                                            cam_fy=float(cam[3]),
+                                            store=store)
 
-        render_img, depth, h_render = self.vm.get_closest_image_batch(
-            i=idx.unsqueeze(0), rot=pred_r.unsqueeze(0), conv='wxyz')
-        # get the bounding box !
-        w = 640
-        h = 480
+        #     self.visualizer.plot_contour(tag='gt_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+        #                                  epoch=self.current_epoch,
+        #                                  img=img,
+        #                                  points=points,
+        #                                  cam_cx=float(cam[0]),
+        #                                  cam_cy=float(cam[1]),
+        #                                  cam_fx=float(cam[2]),
+        #                                  cam_fy=float(cam[3]),
+        #                                  store=store)
 
-        real_img = torch.zeros((1, 3, h, w), device=self.device)
-        # update the target to get new bb
+        # t = pred_t.detach().cpu().numpy()
+        # r = pred_r.detach().cpu().numpy()
 
-        base_inital = quat_to_rot(
-            pred_r.unsqueeze(0), 'wxyz', device=self.device).squeeze(0)
-        base_new = base_inital.view(-1, 3, 3).permute(0, 2, 1)
-        pred_points = torch.add(
-            torch.bmm(model_points.unsqueeze(0), base_inital.unsqueeze(0)), pred_t)
-        # torch.Size([16, 2000, 3]), torch.Size([16, 4]) , torch.Size([16, 3])
-        bb_ls = get_bb_real_target(
-            pred_points, cam.unsqueeze(0))
+        # rot = R.from_quat(re_quat(r, 'wxyz'))
 
-        for j, b in enumerate(bb_ls):
-            if not b.check_min_size():
-                pass
-            c = cam.unsqueeze(0)
-            center_real = backproject_points(
-                pred_t.view(1, 3), fx=c[j, 2], fy=c[j, 3], cx=c[j, 0], cy=c[j, 1])
-            center_real = center_real.squeeze()
-            b.move(-center_real[0], -center_real[1])
-            b.expand(1.1)
-            b.expand_to_correct_ratio(w, h)
-            b.move(center_real[0], center_real[1])
-            crop_real = b.crop(img_orig).unsqueeze(0)
-            up = torch.nn.UpsamplingBilinear2d(size=(h, w))
-            crop_real = torch.transpose(crop_real, 1, 3)
-            crop_real = torch.transpose(crop_real, 2, 3)
-            real_img[j] = up(crop_real)
-        inp = real_img[0].unsqueeze(0)
-        inp = torch.transpose(inp, 1, 3)
-        inp = torch.transpose(inp, 1, 2)
-        data = torch.cat([inp, render_img], dim=3)
-        data = torch.transpose(data, 1, 3)
-        data = torch.transpose(data, 2, 3)
-        self.visualizer.visu_network_input(tag='render_real_comp_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                           epoch=self.current_epoch,
-                                           data=data,
-                                           max_images=1, store=store)
+        # self.visualizer.plot_estimated_pose(tag='pred_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+        #                                     epoch=self.current_epoch,
+        #                                     img=img,
+        #                                     points=copy.deepcopy(
+        #     model_points[:, :].detach(
+        #     ).cpu().numpy()),
+        #     trans=t.reshape((1, 3)),
+        #     rot_mat=rot.as_matrix(),
+        #     cam_cx=float(cam[0]),
+        #     cam_cy=float(cam[1]),
+        #     cam_fx=float(cam[2]),
+        #     cam_fy=float(cam[3]),
+        #     store=store)
+
+        # self.visualizer.plot_contour(tag='pred_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+        #                              epoch=self.current_epoch,
+        #                              img=img,
+        #                              points=copy.deepcopy(
+        #     model_points[:, :].detach(
+        #     ).cpu().numpy()),
+        #     trans=t.reshape((1, 3)),
+        #     rot_mat=rot.as_matrix(),
+        #     cam_cx=float(cam[0]),
+        #     cam_cy=float(cam[1]),
+        #     cam_fx=float(cam[2]),
+        #     cam_fy=float(cam[3]),
+        #     store=store)
+
+        # render_img, depth, h_render = self.vm.get_closest_image_batch(
+        #     i=idx.unsqueeze(0), rot=pred_r.unsqueeze(0), conv='wxyz')
+        # # get the bounding box !
+        # w = 640
+        # h = 480
+
+        # real_img = torch.zeros((1, 3, h, w), device=self.device)
+        # # update the target to get new bb
+
+        # base_inital = quat_to_rot(
+        #     pred_r.unsqueeze(0), 'wxyz', device=self.device).squeeze(0)
+        # base_new = base_inital.view(-1, 3, 3).permute(0, 2, 1)
+        # pred_points = torch.add(
+        #     torch.bmm(model_points.unsqueeze(0), base_inital.unsqueeze(0)), pred_t)
+        # # torch.Size([16, 2000, 3]), torch.Size([16, 4]) , torch.Size([16, 3])
+        # bb_ls = get_bb_real_target(
+        #     pred_points, cam.unsqueeze(0))
+
+        # for j, b in enumerate(bb_ls):
+        #     if not b.check_min_size():
+        #         pass
+        #     c = cam.unsqueeze(0)
+        #     center_real = backproject_points(
+        #         pred_t.view(1, 3), fx=c[j, 2], fy=c[j, 3], cx=c[j, 0], cy=c[j, 1])
+        #     center_real = center_real.squeeze()
+        #     b.move(-center_real[0], -center_real[1])
+        #     b.expand(1.1)
+        #     b.expand_to_correct_ratio(w, h)
+        #     b.move(center_real[0], center_real[1])
+        #     crop_real = b.crop(img_orig).unsqueeze(0)
+        #     up = torch.nn.UpsamplingBilinear2d(size=(h, w))
+        #     crop_real = torch.transpose(crop_real, 1, 3)
+        #     crop_real = torch.transpose(crop_real, 2, 3)
+        #     real_img[j] = up(crop_real)
+        # inp = real_img[0].unsqueeze(0)
+        # inp = torch.transpose(inp, 1, 3)
+        # inp = torch.transpose(inp, 1, 2)
+        # data = torch.cat([inp, render_img], dim=3)
+        # data = torch.transpose(data, 1, 3)
+        # data = torch.transpose(data, 2, 3)
+        # self.visualizer.visu_network_input(tag='render_real_comp_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+        #                                    epoch=self.current_epoch,
+        #                                    data=data,
+        #                                    max_images=1, store=store)
 
     def configure_optimizers(self):
+        
         optimizer = torch.optim.Adam(
-            [{'params': self.pixelwise_refiner.parameters()}], lr=self.hparams['lr'])
+            [{'params': self.df_pose_estimator.parameters()}], lr=self.hparams['lr'])
         scheduler = {
             'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **self.exp['lr_cfg']['on_plateau_cfg']),
             **self.exp['lr_cfg']['scheduler']
@@ -412,6 +490,7 @@ class TrackNet6D(LightningModule):
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
+        self.visualizer.writer = self.logger.experiment
         dataset_train = GenericDataset(
             cfg_d=self.exp['d_train'],
             cfg_env=self.env)
@@ -430,6 +509,7 @@ class TrackNet6D(LightningModule):
         return dataloader_train
 
     def test_dataloader(self):
+        self.visualizer.writer = self.logger.experiment
         dataset_test = GenericDataset(
             cfg_d=self.exp['d_test'],
             cfg_env=self.env)
@@ -438,6 +518,7 @@ class TrackNet6D(LightningModule):
         return dataloader_test
 
     def val_dataloader(self):
+        self.visualizer.writer = self.logger.experiment
         dataset_val = GenericDataset(
             cfg_d=self.exp['d_train'],
             cfg_env=self.env)
@@ -533,6 +614,20 @@ def load_from_file(p):
         raise ValueError
     return data
 
+class CallbackRefine(Callback):
+    def on_epoch_start(self, trainer, pl_module):
+        if pl_module.best_val_loss < 0.016:
+            logging.warning('Refine Started')
+            pl_module.exp['model']['df_refine_iterations'] = 2
+
+            optimizer = torch.optim.Adam(
+                    [{'params': pl_module.df_pose_refiner.parameters()}], lr=pl_module.hparams['lr'])
+            scheduler = {
+                'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **pl_module.exp['lr_cfg']['on_plateau_cfg']),
+                **pl_module.exp['lr_cfg']['scheduler']
+            }
+            trainer.optimizers = [optimizer]
+            trainer.lr_schedulers = trainer.configure_schedulers([scheduler])
 
 if __name__ == "__main__":
     seed_everything(42)
@@ -593,7 +688,7 @@ if __name__ == "__main__":
     exp, env = move_dataset_to_ssd(env, exp)
     exp, env = move_background(env, exp)
     dic = {'exp': exp, 'env': env}
-    model = TrackNet6D(**dic)
+    model = DenseFusionLightning(**dic)
 
     early_stop_callback = EarlyStopping(
       **exp['early_stopping'])
@@ -607,16 +702,17 @@ if __name__ == "__main__":
             exp['checkpoint_load'], map_location=lambda storage, loc: storage)
         model.load_state_dict(checkpoint['state_dict'])
 
-    with torch.autograd.set_detect_anomaly(True):
-        trainer = Trainer(**exp['trainer'],
-        checkpoint_callback=checkpoint_callback,
-        early_stop_callback=early_stop_callback,
-        default_root_dir=exp['model_path'])
-
-        if exp.get('model_mode', 'fit') == 'fit':
-            trainer.fit(model)
-        elif exp.get('model_mode', 'fit') == 'test':
-            trainer.test(model)
-        else:
-            print("Wrong model_mode defined in exp config")
-            raise Exception
+    # with torch.autograd.set_detect_anomaly(True):
+    trainer = Trainer(**exp['trainer'],
+    checkpoint_callback=checkpoint_callback,
+    early_stop_callback=early_stop_callback,
+    callbacks=[CallbackRefine()],
+    default_root_dir=exp['model_path'])
+0
+    if exp.get('model_mode', 'fit') == 'fit':
+        trainer.fit(model)
+    elif exp.get('model_mode', 'fit') == 'test':
+        trainer.test(model)
+    else:
+        print("Wrong model_mode defined in exp config")
+        raise Exception

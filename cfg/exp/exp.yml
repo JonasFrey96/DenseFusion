@@ -1,13 +1,13 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_one_batch_long/_" #overfit_1_batch_bs_1
+model_path: "/media/scratch1/jonfrey/models/runs/df_lightning/debug/_" #overfit_1_batch_bs_1
 model_mode: fit
 
 model:
-  df_load: False
+  df_load: True
   df_refiner: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
   df_pose_estimator: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
   df_w: 0.015
   df_w_rate: 0.3
-  df_refine_iterations: 1
+  df_refine_iterations: 0
   
 lr_cfg:
   on_plateau_cfg:
@@ -41,7 +41,7 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 4
   fast_dev_run: false
-  limit_train_batches: 5000
+  limit_train_batches: 50
   limit_val_batches: 5
   limit_test_batches: 5
   progress_bar_refresh_rate: 1
@@ -59,15 +59,15 @@ visu:
   images_train: 1
   images_test: 1
   images_val: 1
-  
-  log_to_file: True
+  log_to_file: False
+  store: True
 
 early_stopping_cfg:
   patience: 10
 
 loader:
   batch_size: 8
-  num_workers: 6
+  num_workers: 8
   shuffle: True
   pin_memory: True
 
@@ -95,14 +95,13 @@ d_test:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: 1
-    vm_in_dataloader: true
+    overfitting_nr_idx: -1
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
     refine: false
-    add_depth_image: true
-    add_mask_image: true
+    add_depth_image: false
+    add_mask_image: false
     norm_render: false
     color_jitter_render:
       active: false
@@ -148,14 +147,13 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
-    overfitting_nr_idx: 1
-    vm_in_dataloader: true
+    overfitting_nr_idx: -1
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
     refine: false
-    add_depth_image: true
-    add_mask_image: true
+    add_depth_image: false
+    add_mask_image: false
     norm_render: false
     color_jitter_render:
       active: false

@@ -5,5 +5,6 @@ __all__ = (
     'flatten_dict',
     'pad',
     'get_bbox_480_640',
-    'knn'
+    'knn',
+    're_quat'
 )

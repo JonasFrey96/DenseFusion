@@ -24,6 +24,31 @@ def knn(ref, query):
     return knn
 
 
+def re_quat(q, input_format):
+
+    if input_format == 'xyzw':
+        if isinstance(q, torch.Tensor):
+            v0 = q[0].clone()
+        else:
+            v0 = copy.deepcopy(q[0])
+
+        q[0] = q[3]
+        q[3] = q[2]
+        q[2] = q[1]
+        q[1] = v0
+        return q
+    elif input_format == 'wxyz':
+        if isinstance(q, torch.Tensor):
+            v0 = q[0].clone()
+        else:
+            v0 = copy.deepcopy(q[0])
+
+        q[0] = q[1]
+        q[1] = q[2]
+        q[2] = q[3]
+        q[3] = v0
+        return q
+
 def batched_index_select(t, inds, dim=1):
     """index batch tensor
 

@@ -1,4 +1,4 @@
-from loaders_v2 import YCB, Laval, Backend
+from dataset import YCB, Backend
 import random
 
 
@@ -11,10 +11,8 @@ class GenericDataset():
         if cfg_d['name'] == "ycb":
             self._backend = self._backend = YCB(cfg_d=cfg_d,
                                                 cfg_env=cfg_env)
-        elif cfg_d['name'] == "laval":
-            self._backend = Laval(
-                cfg_d=cfg_d,
-                cfg_env=cfg_env)
+        else:
+            raise Exception
 
         self._obj_list_sym = cfg_d['obj_list_sym']
         self._obj_list_fil = cfg_d['obj_list_fil']
